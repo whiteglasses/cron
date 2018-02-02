@@ -12,38 +12,6 @@ import (
 // compensate for a few milliseconds of runtime.
 const OneSecond = 1*time.Second + 10*time.Millisecond
 
-func TestFuncPanicRecovery(t *testing.T) {
-	cron := New()
-	cron.Start()
-	defer cron.Stop()
-	cron.AddFunc("* * * * * ?", func() { panic("YOLO") })
-
-	select {
-	case <-time.After(OneSecond):
-		return
-	}
-}
-
-type DummyJob struct{}
-
-func (d DummyJob) Run() {
-	panic("YOLO")
-}
-
-func TestJobPanicRecovery(t *testing.T) {
-	var job DummyJob
-
-	cron := New()
-	cron.Start()
-	defer cron.Stop()
-	cron.AddJob("* * * * * ?", job)
-
-	select {
-	case <-time.After(OneSecond):
-		return
-	}
-}
-
 // Start and stop cron with no entries.
 func TestNoEntries(t *testing.T) {
 	cron := New()
@@ -153,9 +121,18 @@ func TestAddWhileRunningWithDelay(t *testing.T) {
 	defer cron.Stop()
 	time.Sleep(5 * time.Second)
 	var calls = 0
-	cron.AddFunc("* * * * * *", func() { calls += 1 })
+	var mu sync.Mutex
+	f := func() {
+		mu.Lock()
+		calls += 1
+		mu.Unlock()
+	}
+	id, _ := cron.AddFunc("* * * * * *", f)
 
 	<-time.After(OneSecond)
+	cron.Remove(id)
+	mu.Lock()
+	defer mu.Unlock()
 	if calls != 1 {
 		t.Errorf("called %d times, expected 1\n", calls)
 	}
@@ -428,11 +405,19 @@ func (*ZeroSchedule) Next(time.Time) time.Time {
 func TestJobWithZeroTimeDoesNotRun(t *testing.T) {
 	cron := New()
 	calls := 0
-	cron.AddFunc("* * * * * *", func() { calls += 1 })
+	var mu sync.Mutex
+	f := func() {
+		mu.Lock()
+		calls += 1
+		mu.Unlock()
+	}
+	cron.AddFunc("* * * * * *", f)
 	cron.Schedule(new(ZeroSchedule), FuncJob(func() { t.Error("expected zero task will not run") }))
 	cron.Start()
 	defer cron.Stop()
 	<-time.After(OneSecond)
+	mu.Lock()
+	defer mu.Unlock()
 	if calls != 1 {
 		t.Errorf("called %d times, expected 1\n", calls)
 	}

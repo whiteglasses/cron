@@ -1,9 +1,8 @@
 package cron
 
 import (
-	"log"
-	"runtime"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -17,9 +16,9 @@ type Cron struct {
 	remove   chan EntryID
 	snapshot chan []*Entry
 	running  bool
-	ErrorLog *log.Logger
 	location *time.Location
 	nextID   EntryID
+	mu       sync.Mutex
 }
 
 // Job is an interface for submitted cron jobs.
@@ -94,7 +93,6 @@ func NewWithLocation(location *time.Location) *Cron {
 		snapshot: make(chan []*Entry),
 		remove:   make(chan EntryID),
 		running:  false,
-		ErrorLog: nil,
 		location: location,
 	}
 }
@@ -126,6 +124,8 @@ func (c *Cron) Schedule(schedule Schedule, cmd Job) EntryID {
 		Schedule: schedule,
 		Job:      cmd,
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.running {
 		c.entries = append(c.entries, entry)
 	} else {
@@ -136,6 +136,8 @@ func (c *Cron) Schedule(schedule Schedule, cmd Job) EntryID {
 
 // Entries returns a snapshot of the cron entries.
 func (c *Cron) Entries() []*Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.running {
 		c.snapshot <- nil
 		x := <-c.snapshot
@@ -156,13 +158,14 @@ func (c *Cron) Entry(id EntryID) *Entry {
 
 // Remove an entry from being run in the future.
 func (c *Cron) Remove(id EntryID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.running {
 		c.remove <- id
 	} else {
 		c.removeEntry(id)
 	}
 }
-
 
 // Location gets the time zone location
 func (c *Cron) Location() *time.Location {
@@ -171,6 +174,8 @@ func (c *Cron) Location() *time.Location {
 
 // Start the cron scheduler in its own go-routine, or no-op if already started.
 func (c *Cron) Start() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.running {
 		return
 	}
@@ -180,24 +185,15 @@ func (c *Cron) Start() {
 
 // Run the cron scheduler, or no-op if already running.
 func (c *Cron) Run() {
+	c.mu.Lock()
 	if c.running {
 		return
 	}
 	c.running = true
+	c.mu.Unlock()
 	c.run()
 }
 
-func (c *Cron) runWithRecovery(j Job) {
-	defer func() {
-		if r := recover(); r != nil {
-			const size = 64 << 10
-			buf := make([]byte, size)
-			buf = buf[:runtime.Stack(buf, false)]
-			c.logf("cron: panic running job: %v\n%s", r, buf)
-		}
-	}()
-	j.Run()
-}
 
 // Run the scheduler. this is private just due to the need to synchronize
 // access to the 'running' state variable.
@@ -230,7 +226,7 @@ func (c *Cron) run() {
 					if e.Next.After(now) || e.Next.IsZero() {
 						break
 					}
-					go c.runWithRecovery(e.Job)
+					go e.Job.Run()
 					e.Prev = e.Next
 					e.Next = e.Schedule.Next(now)
 				}
@@ -258,17 +254,10 @@ func (c *Cron) run() {
 	}
 }
 
-// Logs an error to stderr or to the configured error log
-func (c *Cron) logf(format string, args ...interface{}) {
-	if c.ErrorLog != nil {
-		c.ErrorLog.Printf(format, args...)
-	} else {
-		log.Printf(format, args...)
-	}
-}
-
 // Stop stops the cron scheduler if it is running; otherwise it does nothing.
 func (c *Cron) Stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.running {
 		return
 	}
@@ -300,7 +289,6 @@ func (c *Cron) removeEntry(id EntryID) {
 	}
 	c.entries = entries
 }
-
 
 // now returns current time in c location
 func (c *Cron) now() time.Time {
