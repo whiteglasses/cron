@@ -440,3 +440,19 @@ func stop(cron *Cron) chan bool {
 	}()
 	return ch
 }
+
+
+func TestConcurrentStartStop(t *testing.T) {
+
+	// This test only matters with race detector
+
+	cron := New()
+	cron.AddFunc("* * * * * ?", func() {})
+	go cron.Stop()
+	go cron.Start()
+	go cron.Start()
+	go cron.Stop()
+	go cron.Start()
+	go cron.Stop()
+	go cron.Stop()
+}
