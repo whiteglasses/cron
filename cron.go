@@ -118,13 +118,13 @@ func (c *Cron) AddJob(spec string, cmd Job) (EntryID, error) {
 
 // Schedule adds a Job to the Cron to be run on the given schedule.
 func (c *Cron) Schedule(schedule Schedule, cmd Job) EntryID {
+	c.mu.Lock()
 	c.nextID++
 	entry := &Entry{
 		ID:       c.nextID,
 		Schedule: schedule,
 		Job:      cmd,
 	}
-	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.running {
 		c.entries = append(c.entries, entry)
