@@ -153,7 +153,7 @@ func (c *Cron) Entry(id EntryID) *Entry {
 			return entry
 		}
 	}
-	return &Entry{}
+	return nil
 }
 
 // Remove an entry from being run in the future.
